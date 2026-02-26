@@ -1,6 +1,8 @@
 # Todoist Tracker
+---
+## **Cursor Prompts**
 
-### Cursor Prompt 1
+### **Cursor Prompt 1**
 
 Build a repo called todoist-tracker.
 
@@ -35,3 +37,9 @@ GitHub Actions:
 - Commit and push updated activity/completed.md and state.json using GITHUB_TOKEN.
 
 Include basic error handling and exit non-zero on HTTP errors.
+
+---
+## **To Do:**
+
+- [ ] Group by week
+- [ ] Add more metadta (P\priority level, parent task, parent project)
