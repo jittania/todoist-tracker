@@ -1,34 +1,38 @@
 #!/usr/bin/env python3
 """
-Fetch Todoist completed tasks since last run and append to activity/completed.md.
-Uses GET .../tasks/completed/by_completion_date with since/until and cursor pagination.
+Fetch Todoist completed tasks since last run; maintain event store and render
+activity/completed.md grouped by week (America/Los_Angeles, Monday start) with metadata.
 """
 from __future__ import annotations
 
 import json
 import os
-import re
 import sys
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 
-# API (3-month range limit)
-BASE_URL = "https://api.todoist.com/api/v1/tasks/completed/by_completion_date"
+# API (3-month range limit for completed)
+API_BASE = "https://api.todoist.com/api/v1"
+COMPLETED_URL = f"{API_BASE}/tasks/completed/by_completion_date"
+PROJECTS_URL = f"{API_BASE}/projects"
+TASK_URL_TEMPLATE = f"{API_BASE}/tasks/{{task_id}}"
 THREE_MONTHS_DAYS = 90
+WEEK_TZ = ZoneInfo("America/Los_Angeles")
 
 # Paths (repo root = parent of scripts/)
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATE_PATH = REPO_ROOT / "state.json"
-LOG_PATH = REPO_ROOT / "activity" / "completed.md"
-
-# ID in log for deduplication: hidden HTML comment
-ID_COMMENT_RE = re.compile(r"<!-- id:(\d+) -->")
+ACTIVITY_DIR = REPO_ROOT / "activity"
+EVENTS_PATH = ACTIVITY_DIR / "completed_events.jsonl"
+LOG_PATH = ACTIVITY_DIR / "completed.md"
 
 
 def get_state() -> dict:
-    """Load state.json; return dict with last_run_iso and optionally logged_ids."""
+    """Load state.json; return dict with last_run_iso."""
     if not STATE_PATH.exists():
         return {}
     try:
@@ -47,18 +51,82 @@ def save_state(state: dict) -> None:
         f.write("\n")
 
 
-def existing_logged_ids() -> set[str]:
-    """Parse activity/completed.md for existing task ids (<!-- id:123 -->)."""
-    ids: set[str] = set()
-    if not LOG_PATH.exists():
-        return ids
+def load_events() -> list[dict]:
+    """Load all events from completed_events.jsonl (one JSON object per line)."""
+    events: list[dict] = []
+    if not EVENTS_PATH.exists():
+        return events
     try:
-        text = LOG_PATH.read_text(encoding="utf-8")
-        for m in ID_COMMENT_RE.finditer(text):
-            ids.add(m.group(1))
-    except OSError:
-        pass
-    return ids
+        with open(EVENTS_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    events.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError as e:
+        print(f"Warning: could not read event store: {e}", file=sys.stderr)
+    return events
+
+
+def append_events(new_events: list[dict]) -> None:
+    """Append new event dicts to completed_events.jsonl."""
+    ACTIVITY_DIR.mkdir(parents=True, exist_ok=True)
+    with open(EVENTS_PATH, "a", encoding="utf-8") as f:
+        for ev in new_events:
+            f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+
+
+def http_get(url: str, token: str, params: dict | None = None) -> requests.Response:
+    """GET with Bearer token; raise on non-OK (caller can exit)."""
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = requests.get(url, params=params, headers=headers, timeout=30)
+    if not resp.ok:
+        print(f"HTTP error: {resp.status_code} {resp.reason}", file=sys.stderr)
+        print(resp.text[:500], file=sys.stderr)
+        sys.exit(1)
+    return resp
+
+
+def fetch_projects(token: str) -> dict[str, str]:
+    """Fetch all projects and return id -> name map."""
+    id_to_name: dict[str, str] = {}
+    cursor: str | None = ""
+    while True:
+        params: dict = {}
+        if cursor:
+            params["cursor"] = cursor
+        resp = http_get(PROJECTS_URL, token, params if params else None)
+        raw = resp.json()
+        # API may return a list (REST v2) or dict with results/projects + next_cursor
+        if isinstance(raw, list):
+            projects_list = raw
+            cursor = None
+        else:
+            projects_list = raw.get("projects") or raw.get("results") or []
+            cursor = raw.get("next_cursor")
+        for p in projects_list:
+            pid = str(p.get("id", ""))
+            name = (p.get("name") or "").strip() or "(No name)"
+            id_to_name[pid] = name
+        if not cursor:
+            break
+    return id_to_name
+
+
+def fetch_task(token: str, task_id: str) -> dict | None:
+    """Fetch a single task by id; return None on 404 or error."""
+    url = TASK_URL_TEMPLATE.format(task_id=task_id)
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = requests.get(url, headers=headers, timeout=30)
+    if resp.status_code == 404 or not resp.ok:
+        return None
+    try:
+        return resp.json()
+    except Exception:
+        return None
 
 
 def fetch_completed(
@@ -67,7 +135,6 @@ def fetch_completed(
     until_iso: str,
 ) -> list[dict]:
     """Fetch all completed tasks in [since_iso, until_iso] with pagination."""
-    # Clamp to 3 months
     since_dt = datetime.fromisoformat(since_iso.replace("Z", "+00:00"))
     until_dt = datetime.fromisoformat(until_iso.replace("Z", "+00:00"))
     if (until_dt - since_dt).days > THREE_MONTHS_DAYS:
@@ -76,27 +143,127 @@ def fetch_completed(
 
     all_items: list[dict] = []
     cursor: str | None = ""
-    headers = {"Authorization": f"Bearer {token}"}
-
     while True:
         params: dict = {"since": since_iso, "until": until_iso}
         if cursor:
             params["cursor"] = cursor
-
-        resp = requests.get(BASE_URL, params=params, headers=headers, timeout=30)
-        if not resp.ok:
-            print(f"HTTP error: {resp.status_code} {resp.reason}", file=sys.stderr)
-            print(resp.text[:500], file=sys.stderr)
-            sys.exit(1)
-
+        resp = http_get(COMPLETED_URL, token, params)
         data = resp.json()
         items = data.get("items") or []
         all_items.extend(items)
         cursor = data.get("next_cursor")
         if not cursor:
             break
-
     return all_items
+
+
+def event_from_item(item: dict) -> dict:
+    """Build event dict from API item (id, content, completed_at, project_id, parent_id, priority)."""
+    return {
+        "id": str(item.get("id", "")),
+        "content": (item.get("content") or "").strip(),
+        "completed_at": item.get("completed_at") or "",
+        "project_id": str(item.get("project_id", "")),
+        "parent_id": str(item.get("parent_id", "")) if item.get("parent_id") else "",
+        "priority": int(item.get("priority", 1)) if item.get("priority") is not None else 1,
+    }
+
+
+def resolve_parent_title(
+    parent_id: str,
+    id_to_content: dict[str, str],
+    token: str,
+) -> str:
+    """Return parent title from event store, or API, or fallback to (parent_id: <id>)."""
+    if not parent_id:
+        return ""
+    if parent_id in id_to_content:
+        return id_to_content[parent_id]
+    task = fetch_task(token, parent_id)
+    if task:
+        return (task.get("content") or "").strip() or "(No title)"
+    return f"(parent_id: {parent_id})"
+
+
+def completed_at_to_local_date(completed_at: str) -> tuple[datetime, str]:
+    """Parse completed_at (ISO UTC) and return (local datetime, YYYY-MM-DD) in America/Los_Angeles."""
+    if not completed_at:
+        return datetime.min.replace(tzinfo=WEEK_TZ), "0000-00-00"
+    try:
+        dt_utc = datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+        local = dt_utc.astimezone(WEEK_TZ)
+        return local, local.strftime("%Y-%m-%d")
+    except Exception:
+        return datetime.min.replace(tzinfo=WEEK_TZ), "0000-00-00"
+
+
+def week_start_local(local_dt: datetime) -> datetime:
+    """Monday of the week for local_dt (America/Los_Angeles)."""
+    # weekday(): Monday=0, Sunday=6
+    days_back = local_dt.weekday()
+    monday = local_dt - timedelta(days=days_back)
+    return monday.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def render_completed_md(
+    events: list[dict],
+    project_map: dict[str, str],
+    token: str,
+) -> str:
+    """Generate completed.md content: grouped by week (Mon start, LA), chronological within week."""
+    id_to_content = {e["id"]: e["content"] for e in events}
+
+    # Enrich each event with local date, project name, parent suffix
+    enriched: list[dict] = []
+    for e in events:
+        local_dt, date_str = completed_at_to_local_date(e.get("completed_at") or "")
+        project_name = project_map.get(e.get("project_id") or "", "Unknown")
+        priority = e.get("priority", 1)
+        content_safe = (e.get("content") or "").replace("\n", " ")
+        parent_id = (e.get("parent_id") or "").strip()
+        if parent_id:
+            parent_title = resolve_parent_title(parent_id, id_to_content, token)
+            if parent_title and not parent_title.startswith("(parent_id:"):
+                parent_suffix = f" (parent: {parent_title})"
+            else:
+                parent_suffix = f" (parent_id: {parent_id})"
+        else:
+            parent_suffix = ""
+        enriched.append({
+            "local_dt": local_dt,
+            "date_str": date_str,
+            "project_name": project_name,
+            "priority": priority,
+            "content_safe": content_safe,
+            "parent_suffix": parent_suffix,
+        })
+
+    # Sort by completed_at local time
+    enriched.sort(key=lambda x: x["local_dt"])
+
+    # Group by week (Monday date as key)
+    by_week: dict[datetime, list[dict]] = defaultdict(list)
+    for ev in enriched:
+        week_monday = week_start_local(ev["local_dt"])
+        by_week[week_monday].append(ev)
+
+    # Output: ## Week of YYYY-MM-DD then lines
+    lines: list[str] = [
+        "# Completed tasks",
+        "",
+        "Grouped by week (America/Los_Angeles, Monday start).",
+        "",
+    ]
+    for week_monday in sorted(by_week.keys()):
+        heading_date = week_monday.strftime("%Y-%m-%d")
+        lines.append(f"## Week of {heading_date}")
+        lines.append("")
+        for ev in by_week[week_monday]:
+            line = f"- {ev['date_str']} — [{ev['project_name']}] (P{ev['priority']}) {ev['content_safe']}{ev['parent_suffix']}"
+            lines.append(line)
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def main() -> None:
@@ -108,7 +275,6 @@ def main() -> None:
     state = get_state()
     now = datetime.now(timezone.utc)
     end_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-
     last = state.get("last_run_iso")
     if last:
         start_iso = last
@@ -116,29 +282,28 @@ def main() -> None:
         start_dt = now - timedelta(hours=24)
         start_iso = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    logged_ids = existing_logged_ids()
+    # Fetch projects once per run
+    project_map = fetch_projects(token)
     items = fetch_completed(token, start_iso, end_iso)
 
-    new_lines: list[str] = []
+    events = load_events()
+    existing_ids = {e.get("id") for e in events if e.get("id")}
+    new_events: list[dict] = []
     for item in items:
-        task_id = str(item.get("id", ""))
-        if task_id in logged_ids:
+        eid = str(item.get("id", ""))
+        if not eid or eid in existing_ids:
             continue
-        content = item.get("content") or ""
-        completed_at = item.get("completed_at") or ""
-        date_part = completed_at[:10] if len(completed_at) >= 10 else completed_at
-        if not date_part:
-            continue
-        # Escape newlines in content for single-line log
-        content_safe = content.replace("\n", " ")
-        line = f"- {date_part} — {content_safe} <!-- id:{task_id} -->\n"
-        new_lines.append(line)
-        logged_ids.add(task_id)
+        new_events.append(event_from_item(item))
+        existing_ids.add(eid)
 
-    if new_lines:
-        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(LOG_PATH, "a", encoding="utf-8") as f:
-            f.writelines(new_lines)
+    if new_events:
+        append_events(new_events)
+        events = events + new_events
+
+    # Re-render completed.md from full event store
+    md_content = render_completed_md(events, project_map, token)
+    ACTIVITY_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_PATH.write_text(md_content, encoding="utf-8")
 
     state["last_run_iso"] = end_iso
     save_state(state)
