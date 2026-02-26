@@ -1,3 +1,4 @@
 {"id": "6g5Jhpv4V6vJmx33", "content": "Ask cursor to build a script that updates a markdown file with the name of any task that I check off in Todoist and meta-data about that task (priority level, project, date completed)", "completed_at": "2026-02-26T21:49:32.098000Z", "project_id": "6Jx88J7mQXV3CW8V", "parent_id": "6X3mp7f5Hrwcqf8J", "priority": 4}
 {"id": "6g5M2hv2XJGV6V8V", "content": "Test 2", "completed_at": "2026-02-26T22:31:21.030100Z", "project_id": "6Jx88J7mQXV3CW8V", "parent_id": "6X3mp7f5Hrwcqf8J", "priority": 4}
 {"id": "6g5M2hJq62vJpgPV", "content": "Test 1", "completed_at": "2026-02-26T22:20:56.083200Z", "project_id": "6Jx88J7mQXV3CW8V", "parent_id": "6X3mp7f5Hrwcqf8J", "priority": 4}
+{"id": "6g5M2jFq9qcFpqQ3", "content": "Test 3", "completed_at": "2026-02-26T22:33:20.073300Z", "project_id": "6Jx88J7mQXV3CW8V", "parent_id": "6X3mp7f5Hrwcqf8J", "priority": 4}
