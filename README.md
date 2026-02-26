@@ -101,7 +101,7 @@ Deliverables
 ---
 ## **To Do:**
 
-- [ ] Add more metadata (priority level, parent task, parent project)
-- [ ] Group by week
+- [X] Add more metadata (priority level, parent task, parent project)
+- [X] Group by week
 - [ ] Only publish activity for tasks that belong to specific parent tasks
 - [ ] Make repo public
