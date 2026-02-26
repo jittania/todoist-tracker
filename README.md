@@ -216,5 +216,6 @@ The file should grow indefinitely until manually deleted.
 - [X] Add more metadata (priority level, parent task, parent project)
 - [X] Group by week
 - [X] Only publish activity for tasks that belong to specific parent tasks (allowlist in config.json)
-- [ ] Make log append-only (don't allow overwriting)
+- [X] Make log append-only (don't allow overwriting)
+- [ ] Move `allowed_root_task_ids` into a GitHub Secret instead of `config.json` / Read it from environment variable in the script
 - [ ] Make repo public
