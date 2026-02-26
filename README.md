@@ -41,5 +41,7 @@ Include basic error handling and exit non-zero on HTTP errors.
 ---
 ## **To Do:**
 
+- [ ] Only publish activity for tasks that belong to specific parent tasks
+- [ ] Make repo public
 - [ ] Group by week
 - [ ] Add more metadata (priority level, parent task, parent project)
