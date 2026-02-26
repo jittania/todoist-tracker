@@ -42,4 +42,4 @@ Include basic error handling and exit non-zero on HTTP errors.
 ## **To Do:**
 
 - [ ] Group by week
-- [ ] Add more metadta (P\priority level, parent task, parent project)
+- [ ] Add more metadata (priority level, parent task, parent project)
