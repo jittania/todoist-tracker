@@ -10,3 +10,5 @@ Grouped by week (America/Los_Angeles, Monday start).
 - 2026-02-26 — [🌿 1-2 Year Goals (2026)] (P4) Test 2 (parent: **AI developer rebrand: get comfortable with AI dev and productivity tools, do a small project for portfolio, contribute to an open-source AI project**)
 
 - 2026-02-26 — [🌿 1-2 Year Goals (2026)] (P4) Test 3 (parent: **AI developer rebrand: get comfortable with AI dev and productivity tools, do a small project for portfolio, contribute to an open-source AI project**)
+
+- 2026-02-26 — [🌿 1-2 Year Goals (2026)] (P4) Complete remaining Todoist Tracker MVP features (parent: **AI developer rebrand: get comfortable with AI dev and productivity tools, do a small project for portfolio, contribute to an open-source AI project**)
