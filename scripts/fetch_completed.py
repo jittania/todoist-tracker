@@ -25,10 +25,31 @@ WEEK_TZ = ZoneInfo("America/Los_Angeles")
 
 # Paths (repo root = parent of scripts/)
 REPO_ROOT = Path(__file__).resolve().parent.parent
+CONFIG_PATH = REPO_ROOT / "config.json"
 STATE_PATH = REPO_ROOT / "state.json"
 ACTIVITY_DIR = REPO_ROOT / "activity"
 EVENTS_PATH = ACTIVITY_DIR / "completed_events.jsonl"
 LOG_PATH = ACTIVITY_DIR / "completed.md"
+TASK_CACHE_PATH = ACTIVITY_DIR / "task_cache.json"
+
+
+def load_config() -> dict:
+    """Load config.json; return {} if missing or invalid."""
+    if not CONFIG_PATH.exists():
+        return {}
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def get_allowed_root_ids(config: dict) -> set[str]:
+    """Return set of allowed root task IDs (strings). Empty if missing or empty list."""
+    raw = config.get("allowed_root_task_ids")
+    if raw is None or not isinstance(raw, list):
+        return set()
+    return {str(x).strip() for x in raw if str(x).strip()}
 
 
 def get_state() -> dict:
@@ -129,6 +150,86 @@ def fetch_task(token: str, task_id: str) -> dict | None:
         return None
 
 
+def load_task_cache() -> dict[str, dict]:
+    """Load task_cache.json: task_id -> {content, parent_id, project_id}."""
+    if not TASK_CACHE_PATH.exists():
+        return {}
+    try:
+        with open(TASK_CACHE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {str(k): v for k, v in (data or {}).items() if isinstance(v, dict)}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_task_cache(cache: dict[str, dict]) -> None:
+    """Write task_cache.json (lightweight: task_id -> content, parent_id, project_id)."""
+    ACTIVITY_DIR.mkdir(parents=True, exist_ok=True)
+    with open(TASK_CACHE_PATH, "w", encoding="utf-8") as f:
+        json.dump(cache, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
+def task_info_from_api(task: dict) -> dict:
+    """Extract {content, parent_id, project_id} from API task dict."""
+    parent_id = task.get("parent_id")
+    return {
+        "content": (task.get("content") or "").strip(),
+        "parent_id": str(parent_id) if parent_id else "",
+        "project_id": str(task.get("project_id", "")),
+    }
+
+
+def get_task_info(
+    token: str,
+    task_id: str,
+    cache: dict[str, dict],
+    cache_updates: dict[str, dict],
+) -> dict | None:
+    """Resolve task_id to {content, parent_id, project_id}. Use cache then API. Return None if unresolved."""
+    if not task_id:
+        return None
+    if task_id in cache:
+        return cache[task_id]
+    if task_id in cache_updates:
+        return cache_updates[task_id]
+    task = fetch_task(token, task_id)
+    if not task:
+        return None
+    info = task_info_from_api(task)
+    cache_updates[task_id] = info
+    return info
+
+
+def is_task_allowed(
+    task_id: str,
+    parent_id: str,
+    allowed_ids: set[str],
+    token: str,
+    cache: dict[str, dict],
+    cache_updates: dict[str, dict],
+) -> bool:
+    """
+    True if task_id is in allowed_ids or any ancestor is. Walk chain via parent_id; use cache + API.
+    If chain cannot be fully resolved (missing parent), return False (fail closed).
+    """
+    if not task_id:
+        return False
+    if task_id in allowed_ids:
+        return True
+    current_id = task_id
+    next_parent_id = (parent_id or "").strip()
+    while next_parent_id:
+        info = get_task_info(token, next_parent_id, cache, cache_updates)
+        if info is None:
+            return False
+        if next_parent_id in allowed_ids:
+            return True
+        current_id = next_parent_id
+        next_parent_id = (info.get("parent_id") or "").strip()
+    return False
+
+
 def fetch_completed(
     token: str,
     since_iso: str,
@@ -172,16 +273,15 @@ def event_from_item(item: dict) -> dict:
 def resolve_parent_title(
     parent_id: str,
     id_to_content: dict[str, str],
-    token: str,
+    task_cache: dict[str, dict] | None = None,
 ) -> str:
-    """Return parent title from event store, or API, or fallback to (parent_id: <id>)."""
+    """Return parent title from event store or task cache only (no API fetch for display, to avoid leaking)."""
     if not parent_id:
         return ""
     if parent_id in id_to_content:
         return id_to_content[parent_id]
-    task = fetch_task(token, parent_id)
-    if task:
-        return (task.get("content") or "").strip() or "(No title)"
+    if task_cache and parent_id in task_cache:
+        return (task_cache[parent_id].get("content") or "").strip() or "(No title)"
     return f"(parent_id: {parent_id})"
 
 
@@ -208,12 +308,12 @@ def week_start_local(local_dt: datetime) -> datetime:
 def render_completed_md(
     events: list[dict],
     project_map: dict[str, str],
-    token: str,
+    task_cache: dict[str, dict] | None = None,
 ) -> str:
     """Generate completed.md content: grouped by week (Mon start, LA), chronological within week."""
     id_to_content = {e["id"]: e["content"] for e in events}
 
-    # Enrich each event with local date, project name, parent suffix
+    # Enrich each event with local date, project name, parent suffix (no API fetch for parent title)
     enriched: list[dict] = []
     for e in events:
         local_dt, date_str = completed_at_to_local_date(e.get("completed_at") or "")
@@ -222,7 +322,7 @@ def render_completed_md(
         content_safe = (e.get("content") or "").replace("\n", " ")
         parent_id = (e.get("parent_id") or "").strip()
         if parent_id:
-            parent_title = resolve_parent_title(parent_id, id_to_content, token)
+            parent_title = resolve_parent_title(parent_id, id_to_content, task_cache)
             if parent_title and not parent_title.startswith("(parent_id:"):
                 parent_suffix = f" (parent: {parent_title})"
             else:
@@ -272,6 +372,12 @@ def main() -> None:
         print("Error: TODOIST_API_TOKEN is not set", file=sys.stderr)
         sys.exit(1)
 
+    config = load_config()
+    allowed_ids = get_allowed_root_ids(config)
+    if not allowed_ids:
+        # Safety: no allowlist -> write nothing, exit successfully
+        sys.exit(0)
+
     state = get_state()
     now = datetime.now(timezone.utc)
     end_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -281,6 +387,9 @@ def main() -> None:
     else:
         start_dt = now - timedelta(hours=24)
         start_iso = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    cache = load_task_cache()
+    cache_updates: dict[str, dict] = {}
 
     # Fetch projects once per run
     project_map = fetch_projects(token)
@@ -293,6 +402,9 @@ def main() -> None:
         eid = str(item.get("id", ""))
         if not eid or eid in existing_ids:
             continue
+        parent_id = str(item.get("parent_id") or "")
+        if not is_task_allowed(eid, parent_id, allowed_ids, token, cache, cache_updates):
+            continue
         new_events.append(event_from_item(item))
         existing_ids.add(eid)
 
@@ -300,11 +412,25 @@ def main() -> None:
         append_events(new_events)
         events = events + new_events
 
-    # Re-render completed.md from full event store
-    md_content = render_completed_md(events, project_map, token)
+    # Only render tasks that are under allowed roots (filter in case allowlist changed)
+    full_cache = {**cache, **cache_updates}
+    allowed_events = [
+        e for e in events
+        if is_task_allowed(
+            e.get("id") or "",
+            (e.get("parent_id") or "").strip(),
+            allowed_ids,
+            token,
+            cache,
+            cache_updates,
+        )
+    ]
+
+    md_content = render_completed_md(allowed_events, project_map, full_cache)
     ACTIVITY_DIR.mkdir(parents=True, exist_ok=True)
     LOG_PATH.write_text(md_content, encoding="utf-8")
 
+    save_task_cache(full_cache)
     state["last_run_iso"] = end_iso
     save_state(state)
 

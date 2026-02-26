@@ -1,5 +1,38 @@
 # Todoist Tracker
+
+Fetches Todoist completed tasks on a schedule and publishes only those under an allowlist of root task IDs to `activity/completed.md` (grouped by week, with metadata).
+
 ---
+
+## Configuration
+
+- **`config.json`** (repo root) must contain an allowlist of Todoist **task IDs** (not names). Only completed tasks that are the root itself or a descendant (child/subtask at any depth) of one of these roots are included in the log.
+
+  Example:
+  ```json
+  {
+    "allowed_root_task_ids": [1234567890, 9876543210]
+  }
+  ```
+  Use integer IDs. Filtering uses only IDs so renaming a root task won’t break anything.
+
+- If `config.json` is missing or `allowed_root_task_ids` is empty, the script writes nothing and exits successfully (no data is published).
+
+## Finding task IDs
+
+To get the ID of a root task (e.g. to add to `allowed_root_task_ids`):
+
+1. Set `TODOIST_API_TOKEN` in your environment (same token as for the tracker).
+2. Run the lookup script with a search phrase that appears in the task’s title:
+   ```bash
+   python scripts/lookup_task_id.py "Land a salaried job"
+   ```
+3. The script prints matching **active** tasks with `id`, `content`, and `project`. Copy the `id` value(s) into `config.json` → `allowed_root_task_ids`.
+
+Only active tasks are searchable. If your root is already completed, look up the ID in the Todoist app (e.g. task URL or API) or add the ID to config before completing it.
+
+---
+
 ## **Cursor Prompts Used**
 
 ### **Cursor Prompt 1**
@@ -98,10 +131,60 @@ Deliverables
 - Add activity/completed_events.jsonl handling
 ```
 
+### **Cursor Prompt 3**
+
+```
+Update todoist-tracker to ONLY publish completed tasks that roll up under an allowlist of specific “root” parent tasks, using stable task IDs (not names), so renaming the parent task won’t break filtering.
+
+Goal
+- Repo will be public.
+- Only include completed tasks that are descendants (children/subtasks at any depth) of these two root parent tasks:
+  1) "AI developer rebrand: get comfortable with AI dev and productivity tools, do a small project for portfolio, contribute to an open-source AI project"
+  2) "Land a salaried job by end of 2026"
+
+Key requirement: use IDs, not names
+- Add a config file at repo root: config.json
+- It must contain an allowlist of Todoist task IDs, e.g.
+  {
+    "allowed_root_task_ids": [1234567890, 9876543210]
+  }
+- Filtering logic must only rely on IDs. Names are only for display.
+
+How to determine if a completed task is allowed
+- For each completed item, determine its ancestor chain via parent_id links.
+- Include the completed task if:
+  - its own id is in allowed_root_task_ids, OR
+  - any ancestor task id up the chain is in allowed_root_task_ids.
+- If the ancestor chain cannot be fully resolved (missing parent info), default to EXCLUDE (fail closed), since the repo is public.
+
+Data + API behavior
+- Completed items come from GET https://api.todoist.com/api/v1/tasks/completed/by_completion_date (already used).
+- Each completed item may include parent_id.
+- Implement a parent-resolution helper that can fetch task details by id when needed to walk up the chain.
+- Cache fetched task details in-memory per run to reduce API calls.
+- Optionally persist a lightweight cache file (activity/task_cache.json) mapping task_id -> {content, parent_id, project_id} to reduce future calls.
+
+UI/Docs
+- Update README.md with:
+  - How to set allowed_root_task_ids
+  - How to find a task ID:
+    - Provide a small helper script scripts/lookup_task_id.py that searches active tasks by text query and prints matching tasks with ids (so the user can paste the IDs into config.json).
+- Ensure logs only include allowed tasks and never leak other task titles.
+
+Implementation deliverables
+- Add config.json support
+- Update scripts/fetch_completed.py to apply allowlist filtering before writing events/log
+- Add scripts/lookup_task_id.py (search by query, list task ids + titles + project)
+- Keep existing weekly grouping + metadata logging behavior from prior prompt
+
+Safety
+- If config.json is missing or allowed_root_task_ids is empty, write nothing and exit successfully (no accidental leak).
+```
+
 ---
 ## **To Do:**
 
 - [X] Add more metadata (priority level, parent task, parent project)
 - [X] Group by week
-- [ ] Only publish activity for tasks that belong to specific parent tasks
+- [X] Only publish activity for tasks that belong to specific parent tasks (allowlist in config.json)
 - [ ] Make repo public
