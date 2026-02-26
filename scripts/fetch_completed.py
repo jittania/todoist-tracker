@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
-from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -305,65 +305,81 @@ def week_start_local(local_dt: datetime) -> datetime:
     return monday.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def render_completed_md(
-    events: list[dict],
+# Append-only: initial file header (no week heading; that is added when first appending)
+COMPLETED_MD_HEADER = """# Completed tasks
+
+Grouped by week (America/Los_Angeles, Monday start). Append-only.
+
+"""
+
+
+def _enrich_event_for_display(
+    e: dict,
+    id_to_content: dict[str, str],
     project_map: dict[str, str],
-    task_cache: dict[str, dict] | None = None,
-) -> str:
-    """Generate completed.md content: grouped by week (Mon start, LA), chronological within week."""
-    id_to_content = {e["id"]: e["content"] for e in events}
-
-    # Enrich each event with local date, project name, parent suffix (no API fetch for parent title)
-    enriched: list[dict] = []
-    for e in events:
-        local_dt, date_str = completed_at_to_local_date(e.get("completed_at") or "")
-        project_name = project_map.get(e.get("project_id") or "", "Unknown")
-        priority = e.get("priority", 1)
-        content_safe = (e.get("content") or "").replace("\n", " ")
-        parent_id = (e.get("parent_id") or "").strip()
-        if parent_id:
-            parent_title = resolve_parent_title(parent_id, id_to_content, task_cache)
-            if parent_title and not parent_title.startswith("(parent_id:"):
-                parent_suffix = f" (parent: {parent_title})"
-            else:
-                parent_suffix = f" (parent_id: {parent_id})"
+    task_cache: dict[str, dict] | None,
+) -> tuple[datetime, str]:
+    """Return (local_dt, formatted_line) for one event."""
+    local_dt, date_str = completed_at_to_local_date(e.get("completed_at") or "")
+    project_name = project_map.get(e.get("project_id") or "", "Unknown")
+    priority = e.get("priority", 1)
+    content_safe = (e.get("content") or "").replace("\n", " ")
+    parent_id = (e.get("parent_id") or "").strip()
+    if parent_id:
+        parent_title = resolve_parent_title(parent_id, id_to_content, task_cache)
+        if parent_title and not parent_title.startswith("(parent_id:"):
+            parent_suffix = f" (parent: {parent_title})"
         else:
-            parent_suffix = ""
-        enriched.append({
-            "local_dt": local_dt,
-            "date_str": date_str,
-            "project_name": project_name,
-            "priority": priority,
-            "content_safe": content_safe,
-            "parent_suffix": parent_suffix,
-        })
+            parent_suffix = f" (parent_id: {parent_id})"
+    else:
+        parent_suffix = ""
+    line = f"- {date_str} — [{project_name}] (P{priority}) {content_safe}{parent_suffix}"
+    return local_dt, line
 
-    # Sort by completed_at local time
-    enriched.sort(key=lambda x: x["local_dt"])
 
-    # Group by week (Monday date as key)
-    by_week: dict[datetime, list[dict]] = defaultdict(list)
-    for ev in enriched:
-        week_monday = week_start_local(ev["local_dt"])
-        by_week[week_monday].append(ev)
+def append_to_completed_md(
+    new_events: list[dict],
+    project_map: dict[str, str],
+    task_cache: dict[str, dict] | None,
+) -> None:
+    """
+    Append only new task lines to completed.md. Never overwrite or re-render.
+    If current week heading is not the last in the file, append it first; then append lines.
+    """
+    if not new_events:
+        return
+    id_to_content = {e["id"]: e["content"] for e in new_events}
+    enriched: list[tuple[datetime, str]] = []
+    for e in new_events:
+        enriched.append(_enrich_event_for_display(e, id_to_content, project_map, task_cache))
+    enriched.sort(key=lambda x: x[0])
+    lines_str = "\n".join(line for _, line in enriched)
 
-    # Output: ## Week of YYYY-MM-DD then lines
-    lines: list[str] = [
-        "# Completed tasks",
-        "",
-        "Grouped by week (America/Los_Angeles, Monday start).",
-        "",
-    ]
-    for week_monday in sorted(by_week.keys()):
-        heading_date = week_monday.strftime("%Y-%m-%d")
-        lines.append(f"## Week of {heading_date}")
-        lines.append("")
-        for ev in by_week[week_monday]:
-            line = f"- {ev['date_str']} — [{ev['project_name']}] (P{ev['priority']}) {ev['content_safe']}{ev['parent_suffix']}"
-            lines.append(line)
-        lines.append("")
+    now_la = datetime.now(WEEK_TZ)
+    week_monday = week_start_local(now_la)
+    heading_date = week_monday.strftime("%Y-%m-%d")
+    week_heading_re = re.compile(r"^## Week of (\d{4}-\d{2}-\d{2})\s*$", re.MULTILINE)
 
-    return "\n".join(lines).rstrip() + "\n"
+    ACTIVITY_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not LOG_PATH.exists() or LOG_PATH.read_text(encoding="utf-8").strip() == "":
+        LOG_PATH.write_text(
+            COMPLETED_MD_HEADER + f"## Week of {heading_date}\n\n" + lines_str + "\n",
+            encoding="utf-8",
+        )
+        return
+
+    content = LOG_PATH.read_text(encoding="utf-8")
+    matches = week_heading_re.findall(content)
+    last_week_date = matches[-1] if matches else None
+
+    if last_week_date == heading_date:
+        to_append = "\n" + lines_str + "\n"
+    else:
+        to_append = "\n\n## Week of " + heading_date + "\n\n" + lines_str + "\n"
+
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(to_append)
 
 
 def main() -> None:
@@ -408,27 +424,11 @@ def main() -> None:
         new_events.append(event_from_item(item))
         existing_ids.add(eid)
 
+    full_cache = {**cache, **cache_updates}
+
     if new_events:
         append_events(new_events)
-        events = events + new_events
-
-    # Only render tasks that are under allowed roots (filter in case allowlist changed)
-    full_cache = {**cache, **cache_updates}
-    allowed_events = [
-        e for e in events
-        if is_task_allowed(
-            e.get("id") or "",
-            (e.get("parent_id") or "").strip(),
-            allowed_ids,
-            token,
-            cache,
-            cache_updates,
-        )
-    ]
-
-    md_content = render_completed_md(allowed_events, project_map, full_cache)
-    ACTIVITY_DIR.mkdir(parents=True, exist_ok=True)
-    LOG_PATH.write_text(md_content, encoding="utf-8")
+        append_to_completed_md(new_events, project_map, full_cache)
 
     save_task_cache(full_cache)
     state["last_run_iso"] = end_iso

@@ -181,10 +181,40 @@ Safety
 - If config.json is missing or allowed_root_task_ids is empty, write nothing and exit successfully (no accidental leak).
 ```
 
+### **Cursor Prompt 4**
+
+```
+Additional objective: make completed.md append-only
+
+Currently, the script re-renders and fully overwrites activity/completed.md on each successful run.
+
+Change this behavior:
+
+- Do NOT overwrite activity/completed.md.
+- The file must be append-only.
+- Only append newly discovered, allowed completed tasks.
+- Never re-render historical weeks.
+- Never delete or modify existing content.
+- Deduplication must still prevent duplicate entries from being appended.
+
+Weekly grouping behavior with append-only mode:
+- If the current week heading (## Week of YYYY-MM-DD) does not exist at the bottom of the file, append a new heading.
+- If it already exists as the most recent heading, append new task lines under it.
+- Do not attempt to regroup or reorder older entries.
+
+Important:
+- Keep completed_events.jsonl for deduplication and state tracking.
+- Filtering (allowed_root_task_ids) must still occur BEFORE appending.
+- If no new eligible tasks are found, do nothing and exit cleanly.
+
+The file should grow indefinitely until manually deleted.
+```
+
 ---
 ## **To Do:**
 
 - [X] Add more metadata (priority level, parent task, parent project)
 - [X] Group by week
 - [X] Only publish activity for tasks that belong to specific parent tasks (allowlist in config.json)
+- [ ] Make log append-only (don't allow overwriting)
 - [ ] Make repo public
