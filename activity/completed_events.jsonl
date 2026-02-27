@@ -7,3 +7,4 @@
 {"id": "6g5QMp2pPR3Gw2cV", "content": "Test orange", "completed_at": "2026-02-27T06:23:12.081400Z", "project_id": "6Jx88J7mQXV3CW8V", "parent_id": "6X3mp7f5Hrwcqf8J", "priority": 3}
 {"id": "6g5QVJphcwFCWhp3", "content": "Test blue", "completed_at": "2026-02-27T06:24:14.091700Z", "project_id": "6Jx88J7mQXV3CW8V", "parent_id": "6X3mp7f5Hrwcqf8J", "priority": 1}
 {"id": "6g5QMpV4p9Ch7XHV", "content": "Test blue", "completed_at": "2026-02-27T06:24:14.008500Z", "project_id": "6Jx88J7mQXV3CW8V", "parent_id": "6X3mp7f5Hrwcqf8J", "priority": 2}
+{"id": "6g5QfM2vhrHmjQjV", "content": "I am a red priority 1", "completed_at": "2026-02-27T06:48:08.093000Z", "project_id": "6Jx88J7mQXV3CW8V", "parent_id": "6X3mp7f5Hrwcqf8J", "priority": 3}
