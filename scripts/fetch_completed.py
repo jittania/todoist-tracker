@@ -521,30 +521,44 @@ def _build_grouped_blocks(
     return "\n\n".join(blocks)
 
 
-def append_to_completed_md(
-    new_events: list[dict],
+def _events_in_current_week(events: list[dict], week_monday: datetime) -> list[dict]:
+    """Return events whose completed_at (LA) falls in the week starting week_monday."""
+    result = []
+    for e in events:
+        completed_at = e.get("completed_at") or ""
+        local_dt, _ = completed_at_to_local_date(completed_at)
+        if week_start_local(local_dt) == week_monday:
+            result.append(e)
+    return result
+
+
+def render_current_week_to_completed_md(
+    all_events: list[dict],
     project_map: dict[str, str],
     task_cache: dict[str, dict] | None,
 ) -> None:
     """
-    Append only new task lines to completed.md. Never overwrite or re-render.
-    If current week heading is not the last in the file, append it first; then append lines.
+    Re-render only the current week's section from the full event store, so tasks
+    are grouped under the same date and Goal across runs. Past weeks are left unchanged.
     """
-    if not new_events:
-        return
-    id_to_content = {}
-    for e in new_events:
-        id_to_content[e["id"]] = e["content"]
-    enriched = []
-    for e in new_events:
-        row = _enrich_event_for_display(e, id_to_content, project_map, task_cache)
-        enriched.append(row)
-    lines_str = _build_grouped_blocks(enriched)
-
     now_la = datetime.now(WEEK_TZ)
     week_monday = week_start_local(now_la)
     heading_date = week_monday.strftime("%Y-%m-%d")
     week_heading_re = re.compile(r"^## Week of (\d{4}-\d{2}-\d{2})\s*$", re.MULTILINE)
+
+    current_week_events = _events_in_current_week(all_events, week_monday)
+    if not current_week_events:
+        # Nothing to show for current week; don't overwrite or append empty section
+        return
+
+    id_to_content = {}
+    for e in all_events:
+        id_to_content[e["id"]] = e["content"]
+    enriched = []
+    for e in current_week_events:
+        row = _enrich_event_for_display(e, id_to_content, project_map, task_cache)
+        enriched.append(row)
+    lines_str = _build_grouped_blocks(enriched)
 
     ACTIVITY_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -556,20 +570,26 @@ def append_to_completed_md(
         return
 
     content = LOG_PATH.read_text(encoding="utf-8")
-    matches = week_heading_re.findall(content)
-    if matches:
-        last_week_date = matches[-1]
-    else:
-        last_week_date = None
+    # Find the last "## Week of YYYY-MM-DD" and whether it's the current week
+    matches = list(week_heading_re.finditer(content))
+    if not matches:
+        # No week headings; append current week
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write("\n\n## Week of " + heading_date + "\n\n" + lines_str + "\n")
+        return
 
-    current_week_is_last_heading = (last_week_date == heading_date)
-    if current_week_is_last_heading:
-        to_append = "\n" + lines_str + "\n"
+    last_match = matches[-1]
+    last_heading_date = last_match.group(1)
+    start_pos = last_match.start()
+    new_section = f"## Week of {heading_date}\n\n" + lines_str + "\n"
+    if last_heading_date == heading_date:
+        # Replace current week section with re-rendered content (merged tasks)
+        new_content = content[:start_pos] + new_section
+        LOG_PATH.write_text(new_content, encoding="utf-8")
     else:
-        to_append = "\n\n## Week of " + heading_date + "\n\n" + lines_str + "\n"
-
-    with open(LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(to_append)
+        # New week; append
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write("\n\n" + new_section)
 
 
 def main() -> None:
@@ -621,7 +641,8 @@ def main() -> None:
 
     if new_events:
         append_events(new_events)
-        append_to_completed_md(new_events, project_map, full_cache)
+    all_events = events + new_events
+    render_current_week_to_completed_md(all_events, project_map, full_cache)
 
     save_task_cache(full_cache)
     state["last_run_iso"] = end_iso
