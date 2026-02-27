@@ -293,7 +293,7 @@ def event_from_item(item: dict) -> dict:
     elif raw_priority == 3:
         priority = 2
     else:
-        priority = 3
+        priority = 1
 
     raw_parent_id = item.get("parent_id")
     if raw_parent_id:
