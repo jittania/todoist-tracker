@@ -415,8 +415,8 @@ def _enrich_event_for_display(
     id_to_content: dict[str, str],
     project_map: dict[str, str],
     task_cache: dict[str, dict] | None,
-) -> tuple[datetime, str]:
-    """Return (local_dt, formatted_block) for one event. Block is multi-line (date + Completed Task, Parent, Project)."""
+) -> tuple[datetime, str, str, str, str, str]:
+    """Return (local_dt, date_line, priority_display, content_safe, parent_display, project_name) for one event."""
     completed_at = e.get("completed_at") or ""
     local_dt, _ = completed_at_to_local_date(completed_at)
 
@@ -453,13 +453,43 @@ def _enrich_event_for_display(
         parent_display = "—"
 
     date_line = _format_entry_date(local_dt)
-    block = (
-        f"- **{date_line}**\n"
-        f"  - Completed Task: {priority_display} {content_safe}\n"
-        f"  - Parent: `{parent_display}`\n"
-        f"  - Project: {project_name}"
-    )
-    return local_dt, block
+    return local_dt, date_line, priority_display, content_safe, parent_display, project_name
+
+
+def _build_grouped_blocks(
+    enriched: list[tuple[datetime, str, str, str, str, str]],
+) -> str:
+    """Group enriched events by date then by (Goal, Project); output one block per date with Goal subsections."""
+    # Sort by local_dt
+    sorted_enriched = sorted(enriched, key=lambda x: x[0])
+    # date_line -> list of (parent_display, project_name, [(priority_display, content_safe), ...]) in order
+    date_order = []
+    groups_by_date = {}
+
+    for (local_dt, date_line, priority_display, content_safe, parent_display, project_name) in sorted_enriched:
+        if date_line not in groups_by_date:
+            groups_by_date[date_line] = []
+            date_order.append(date_line)
+        grp_list = groups_by_date[date_line]
+        found = False
+        for i in range(len(grp_list)):
+            p, proj, tasks = grp_list[i]
+            if (p, proj) == (parent_display, project_name):
+                tasks.append((priority_display, content_safe))
+                found = True
+                break
+        if not found:
+            grp_list.append((parent_display, project_name, [(priority_display, content_safe)]))
+
+    blocks = []
+    for date_line in date_order:
+        lines = [f"- **{date_line}**"]
+        for parent_display, project_name, tasks in groups_by_date[date_line]:
+            lines.append(f"  - Goal: `**{parent_display}**` | {project_name}")
+            for priority_display, content_safe in tasks:
+                lines.append(f"    - {priority_display} {content_safe}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def append_to_completed_md(
@@ -478,11 +508,9 @@ def append_to_completed_md(
         id_to_content[e["id"]] = e["content"]
     enriched = []
     for e in new_events:
-        local_dt, line = _enrich_event_for_display(e, id_to_content, project_map, task_cache)
-        enriched.append((local_dt, line))
-    enriched.sort(key=lambda x: x[0])
-    block_parts = [block for _, block in enriched]
-    lines_str = "\n\n".join(block_parts)
+        row = _enrich_event_for_display(e, id_to_content, project_map, task_cache)
+        enriched.append(row)
+    lines_str = _build_grouped_blocks(enriched)
 
     now_la = datetime.now(WEEK_TZ)
     week_monday = week_start_local(now_la)
