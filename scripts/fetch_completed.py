@@ -57,6 +57,23 @@ def get_allowed_root_ids(config: dict) -> set[str]:
     return result
 
 
+def get_allowed_root_ids_from_env_or_config() -> set[str]:
+    """
+    Return allowed root task IDs: from env TODOIST_ALLOWED_ROOT_TASK_IDS (comma-separated)
+    first, else from config.json. Use env/secret in CI so config.json can stay private.
+    """
+    env_val = os.environ.get("TODOIST_ALLOWED_ROOT_TASK_IDS", "").strip()
+    if env_val:
+        result = set()
+        for part in env_val.split(","):
+            s = part.strip()
+            if s:
+                result.add(s)
+        return result
+    config = load_config()
+    return get_allowed_root_ids(config)
+
+
 def get_state() -> dict:
     """Load state.json; return dict with last_run_iso."""
     if not STATE_PATH.exists():
@@ -504,8 +521,7 @@ def main() -> None:
         print("Error: TODOIST_API_TOKEN is not set", file=sys.stderr)
         sys.exit(1)
 
-    config = load_config()
-    allowed_ids = get_allowed_root_ids(config)
+    allowed_ids = get_allowed_root_ids_from_env_or_config()
     if not allowed_ids:
         # Safety: no allowlist -> write nothing, exit successfully
         sys.exit(0)

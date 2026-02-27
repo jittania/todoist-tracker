@@ -2,37 +2,6 @@
 
 Fetches Todoist completed tasks on a schedule and publishes only those under an allowlist of root task IDs to `activity/completed.md` (grouped by week, with metadata).
 
----
-
-## Configuration
-
-- **`config.json`** (repo root) must contain an allowlist of Todoist **task IDs** (not names). Only completed tasks that are the root itself or a descendant (child/subtask at any depth) of one of these roots are included in the log.
-
-  Example:
-  ```json
-  {
-    "allowed_root_task_ids": [1234567890, 9876543210]
-  }
-  ```
-  Use integer IDs. Filtering uses only IDs so renaming a root task won’t break anything.
-
-- If `config.json` is missing or `allowed_root_task_ids` is empty, the script writes nothing and exits successfully (no data is published).
-
-## Finding task IDs
-
-To get the ID of a root task (e.g. to add to `allowed_root_task_ids`):
-
-1. Set `TODOIST_API_TOKEN` in your environment (same token as for the tracker).
-2. Run the lookup script with a search phrase that appears in the task’s title:
-   ```bash
-   python scripts/lookup_task_id.py "Land a salaried job"
-   ```
-3. The script prints matching **active** tasks with `id`, `content`, and `project`. Copy the `id` value(s) into `config.json` → `allowed_root_task_ids`.
-
-Only active tasks are searchable. If your root is already completed, look up the ID in the Todoist app (e.g. task URL or API) or add the ID to config before completing it.
-
----
-
 ## **Cursor Prompts Used**
 
 ### **Cursor Prompt 1**
@@ -220,5 +189,5 @@ The file should grow indefinitely until manually deleted.
 - [X] Refactor Cursor code to be more readable - get rid of all of these dense one-line conditionals
 - [X] Debug priority (1-4) not being read correctly
 - [X] Make `completed.md` entries easier to read
-- [ ] Move `allowed_root_task_ids` into a GitHub Secret instead of `config.json` / Read it from environment variable in the script
+- [X] Move `allowed_root_task_ids` into a GitHub Secret instead of `config.json` / Read it from environment variable in the script
 - [ ] Make repo public
