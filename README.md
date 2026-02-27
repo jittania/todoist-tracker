@@ -190,4 +190,4 @@ The file should grow indefinitely until manually deleted.
 - [X] Debug priority (1-4) not being read correctly
 - [X] Make `completed.md` entries easier to read
 - [X] Move `allowed_root_task_ids` into a GitHub Secret instead of `config.json` / Read it from environment variable in the script
-- [ ] Make repo public
+- [X] Make repo public
