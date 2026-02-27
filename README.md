@@ -217,5 +217,7 @@ The file should grow indefinitely until manually deleted.
 - [X] Group by week
 - [X] Only publish activity for tasks that belong to specific parent tasks (allowlist in config.json)
 - [X] Make log append-only (don't allow overwriting)
+- [X] Refactor Cursor code to be more readable - get rid of all of these dense one-line conditionals
+- [ ] Debug priority (1-4) not being read correctly
 - [ ] Move `allowed_root_task_ids` into a GitHub Secret instead of `config.json` / Read it from environment variable in the script
 - [ ] Make repo public

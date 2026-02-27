@@ -285,9 +285,15 @@ def event_from_item(item: dict) -> dict:
     """Build event dict from API item (id, content, completed_at, project_id, parent_id, priority)."""
     raw_priority = item.get("priority")
     if raw_priority is None:
-        priority = 1
+        priority = 0
+    elif raw_priority == 1:
+        priority = 4
+    elif raw_priority == 2:
+        priority = 3
+    elif raw_priority == 3:
+        priority = 2
     else:
-        priority = int(raw_priority)
+        priority = 3
 
     raw_parent_id = item.get("parent_id")
     if raw_parent_id:
@@ -369,7 +375,7 @@ def _enrich_event_for_display(
     project_id = e.get("project_id") or ""
     project_name = project_map.get(project_id, "Unknown")
 
-    priority = e.get("priority", 1)
+    priority = e.get("priority", 0)
 
     content_raw = e.get("content") or ""
     content_safe = content_raw.replace("\n", " ")
