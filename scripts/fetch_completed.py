@@ -18,7 +18,8 @@ import requests
 # API (3-month range limit for completed)
 API_BASE = "https://api.todoist.com/api/v1"
 COMPLETED_URL = f"{API_BASE}/tasks/completed/by_completion_date"
-PROJECTS_URL = f"{API_BASE}/projects"
+PROJECTS_URL_V1 = f"{API_BASE}/projects"
+PROJECTS_URL_V2 = "https://api.todoist.com/rest/v2/projects"
 TASK_URL_TEMPLATE = f"{API_BASE}/tasks/{{task_id}}"
 THREE_MONTHS_DAYS = 90
 WEEK_TZ = ZoneInfo("America/Los_Angeles")
@@ -134,32 +135,52 @@ def http_get(url: str, token: str, params: dict | None = None) -> requests.Respo
 
 
 def fetch_projects(token: str) -> dict[str, str]:
-    """Fetch all projects and return id -> name map."""
+    """Fetch all projects and return id -> name map. Tries api/v1 first, then rest/v2 on 404."""
     id_to_name: dict[str, str] = {}
+    headers = {"Authorization": f"Bearer {token}"}
+
+    def parse_response(raw: requests.Response) -> tuple[list, str | None]:
+        data = raw.json()
+        if isinstance(data, list):
+            return data, None
+        projects_list = data.get("projects") or data.get("results") or []
+        cursor = data.get("next_cursor")
+        return projects_list, cursor
+
+    # Try api/v1 first (supports cursor pagination)
     cursor: str | None = ""
-    while True:
-        params: dict = {}
-        if cursor:
-            params["cursor"] = cursor
-        resp = http_get(PROJECTS_URL, token, params if params else None)
-        raw = resp.json()
-        # API may return a list (REST v2) or dict with results/projects + next_cursor
-        if isinstance(raw, list):
-            projects_list = raw
-            cursor = None
-        else:
-            projects_list = raw.get("projects") or raw.get("results") or []
-            cursor = raw.get("next_cursor")
+    try:
+        while True:
+            params = {"cursor": cursor} if cursor else None
+            resp = requests.get(PROJECTS_URL_V1, params=params, headers=headers, timeout=30)
+            if resp.status_code == 404 or resp.status_code == 401:
+                break
+            if not resp.ok:
+                print(f"HTTP error: {resp.status_code} {resp.reason}", file=sys.stderr)
+                print(resp.text[:500], file=sys.stderr)
+                sys.exit(1)
+            projects_list, cursor = parse_response(resp)
+            for p in projects_list:
+                pid = str(p.get("id", ""))
+                name_raw = (p.get("name") or "").strip()
+                id_to_name[pid] = name_raw or "(No name)"
+            if not cursor:
+                return id_to_name
+    except Exception:
+        pass
+
+    # Fallback: rest/v2 (returns a flat list)
+    try:
+        resp = requests.get(PROJECTS_URL_V2, headers=headers, timeout=30)
+        if not resp.ok:
+            return id_to_name
+        projects_list, _ = parse_response(resp)
         for p in projects_list:
             pid = str(p.get("id", ""))
             name_raw = (p.get("name") or "").strip()
-            if name_raw:
-                name = name_raw
-            else:
-                name = "(No name)"
-            id_to_name[pid] = name
-        if not cursor:
-            break
+            id_to_name[pid] = name_raw or "(No name)"
+    except Exception:
+        pass
     return id_to_name
 
 
@@ -460,13 +481,21 @@ def _build_grouped_blocks(
     enriched: list[tuple[datetime, str, str, str, str, str]],
 ) -> str:
     """Group enriched events by date then by (Goal, Project); output one block per date with Goal subsections."""
+    if not enriched:
+        return ""
     # Sort by local_dt
     sorted_enriched = sorted(enriched, key=lambda x: x[0])
     # date_line -> list of (parent_display, project_name, [(priority_display, content_safe), ...]) in order
     date_order = []
     groups_by_date = {}
 
-    for (local_dt, date_line, priority_display, content_safe, parent_display, project_name) in sorted_enriched:
+    for row in sorted_enriched:
+        local_dt, date_line, priority_display, content_safe, parent_display, project_name = row
+        date_line = date_line or "Unknown date"
+        priority_display = priority_display if priority_display is not None else "❌"
+        content_safe = content_safe if content_safe is not None else ""
+        parent_display = parent_display if parent_display is not None else "—"
+        project_name = project_name if project_name is not None else "Unknown"
         if date_line not in groups_by_date:
             groups_by_date[date_line] = []
             date_order.append(date_line)
@@ -486,8 +515,8 @@ def _build_grouped_blocks(
         lines = [f"- **{date_line}**"]
         for parent_display, project_name, tasks in groups_by_date[date_line]:
             lines.append(f"  - Goal: `**{parent_display}**` | {project_name}")
-            for priority_display, content_safe in tasks:
-                lines.append(f"    - {priority_display} {content_safe}")
+            for pri, content in tasks:
+                lines.append(f"    - {pri} {content}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 
