@@ -437,9 +437,9 @@ def _enrich_event_for_display(
 
     date_line = _format_entry_date(local_dt)
     block = (
-        f"- {date_line}\n"
+        f"- **{date_line}**\n"
         f"  - Completed Task: {priority_display} {content_safe}\n"
-        f"  - Parent: {parent_display}\n"
+        f"  - Parent: `{parent_display}`\n"
         f"  - Project: {project_name}"
     )
     return local_dt, block
