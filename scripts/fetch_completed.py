@@ -284,16 +284,16 @@ def fetch_completed(
 def event_from_item(item: dict) -> dict:
     """Build event dict from API item (id, content, completed_at, project_id, parent_id, priority)."""
     raw_priority = item.get("priority")
-    if raw_priority is None:
-        priority = 0
-    elif raw_priority == 1:
-        priority = 4
+    if raw_priority == 1:
+        priority = "⚪️"
     elif raw_priority == 2:
-        priority = 3
+        priority = "🔵"
     elif raw_priority == 3:
-        priority = 2
+        priority = "🟠"
+    elif raw_priority == 4:
+        priority = "🔴"
     else:
-        priority = 1
+        priority = "❌"
 
     raw_parent_id = item.get("parent_id")
     if raw_parent_id:
@@ -392,7 +392,7 @@ def _enrich_event_for_display(
     else:
         parent_suffix = ""
 
-    line = f"- {date_str} — [{project_name}] (P{priority}) {content_safe}{parent_suffix}"
+    line = f"- {date_str} — [{project_name}] {priority} {content_safe}{parent_suffix}"
     return local_dt, line
 
 
