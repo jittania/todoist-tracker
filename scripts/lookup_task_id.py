@@ -23,7 +23,10 @@ def main() -> None:
         print("Error: TODOIST_API_TOKEN is not set", file=sys.stderr)
         sys.exit(1)
 
-    query = " ".join(sys.argv[1:]).strip() if len(sys.argv) > 1 else ""
+    if len(sys.argv) > 1:
+        query = " ".join(sys.argv[1:]).strip()
+    else:
+        query = ""
     if not query:
         print("Usage: python scripts/lookup_task_id.py <search text>", file=sys.stderr)
         print("Example: python scripts/lookup_task_id.py 'Land a salaried job'", file=sys.stderr)
@@ -38,7 +41,11 @@ def main() -> None:
         if r.ok:
             for p in r.json() or []:
                 pid = str(p.get("id", ""))
-                projects[pid] = (p.get("name") or "").strip() or "(No name)"
+                name_raw = (p.get("name") or "").strip()
+                if name_raw:
+                    projects[pid] = name_raw
+                else:
+                    projects[pid] = "(No name)"
     except Exception:
         pass
 
@@ -54,11 +61,11 @@ def main() -> None:
         sys.exit(1)
 
     query_lower = query.lower()
-    matches = [
-        t
-        for t in tasks
-        if query_lower in (t.get("content") or "").lower()
-    ]
+    matches = []
+    for t in tasks:
+        content = t.get("content") or ""
+        if query_lower in content.lower():
+            matches.append(t)
 
     if not matches:
         print(f"No active tasks matching '{query}'.")
@@ -68,9 +75,13 @@ def main() -> None:
     print()
     for t in matches:
         tid = t.get("id", "")
-        content = (t.get("content") or "").strip()
+        content_raw = t.get("content") or ""
+        content = content_raw.strip()
         pid = str(t.get("project_id", ""))
-        project_name = projects.get(pid, pid or "—")
+        if pid in projects:
+            project_name = projects[pid]
+        else:
+            project_name = pid if pid else "—"
         print(f"  id: {tid}")
         print(f"  content: {content}")
         print(f"  project: {project_name}")

@@ -49,7 +49,12 @@ def get_allowed_root_ids(config: dict) -> set[str]:
     raw = config.get("allowed_root_task_ids")
     if raw is None or not isinstance(raw, list):
         return set()
-    return {str(x).strip() for x in raw if str(x).strip()}
+    result = set()
+    for x in raw:
+        s = str(x).strip()
+        if s:
+            result.add(s)
+    return result
 
 
 def get_state() -> dict:
@@ -130,7 +135,11 @@ def fetch_projects(token: str) -> dict[str, str]:
             cursor = raw.get("next_cursor")
         for p in projects_list:
             pid = str(p.get("id", ""))
-            name = (p.get("name") or "").strip() or "(No name)"
+            name_raw = (p.get("name") or "").strip()
+            if name_raw:
+                name = name_raw
+            else:
+                name = "(No name)"
             id_to_name[pid] = name
         if not cursor:
             break
@@ -157,9 +166,13 @@ def load_task_cache() -> dict[str, dict]:
     try:
         with open(TASK_CACHE_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return {str(k): v for k, v in (data or {}).items() if isinstance(v, dict)}
     except (json.JSONDecodeError, OSError):
         return {}
+    result = {}
+    for k, v in (data or {}).items():
+        if isinstance(v, dict):
+            result[str(k)] = v
+    return result
 
 
 def save_task_cache(cache: dict[str, dict]) -> None:
@@ -172,11 +185,21 @@ def save_task_cache(cache: dict[str, dict]) -> None:
 
 def task_info_from_api(task: dict) -> dict:
     """Extract {content, parent_id, project_id} from API task dict."""
-    parent_id = task.get("parent_id")
+    content_raw = task.get("content") or ""
+    content = content_raw.strip()
+
+    parent_id_raw = task.get("parent_id")
+    if parent_id_raw:
+        parent_id = str(parent_id_raw)
+    else:
+        parent_id = ""
+
+    project_id = str(task.get("project_id", ""))
+
     return {
-        "content": (task.get("content") or "").strip(),
-        "parent_id": str(parent_id) if parent_id else "",
-        "project_id": str(task.get("project_id", "")),
+        "content": content,
+        "parent_id": parent_id,
+        "project_id": project_id,
     }
 
 
@@ -260,13 +283,28 @@ def fetch_completed(
 
 def event_from_item(item: dict) -> dict:
     """Build event dict from API item (id, content, completed_at, project_id, parent_id, priority)."""
+    raw_priority = item.get("priority")
+    if raw_priority is None:
+        priority = 1
+    else:
+        priority = int(raw_priority)
+
+    raw_parent_id = item.get("parent_id")
+    if raw_parent_id:
+        parent_id = str(raw_parent_id)
+    else:
+        parent_id = ""
+
+    content_raw = item.get("content") or ""
+    content = content_raw.strip()
+
     return {
         "id": str(item.get("id", "")),
-        "content": (item.get("content") or "").strip(),
+        "content": content,
         "completed_at": item.get("completed_at") or "",
         "project_id": str(item.get("project_id", "")),
-        "parent_id": str(item.get("parent_id", "")) if item.get("parent_id") else "",
-        "priority": int(item.get("priority", 1)) if item.get("priority") is not None else 1,
+        "parent_id": parent_id,
+        "priority": priority,
     }
 
 
@@ -281,7 +319,12 @@ def resolve_parent_title(
     if parent_id in id_to_content:
         return id_to_content[parent_id]
     if task_cache and parent_id in task_cache:
-        return (task_cache[parent_id].get("content") or "").strip() or "(No title)"
+        cached = task_cache[parent_id]
+        content_raw = cached.get("content") or ""
+        content = content_raw.strip()
+        if content:
+            return content
+        return "(No title)"
     return f"(parent_id: {parent_id})"
 
 
@@ -320,11 +363,20 @@ def _enrich_event_for_display(
     task_cache: dict[str, dict] | None,
 ) -> tuple[datetime, str]:
     """Return (local_dt, formatted_line) for one event."""
-    local_dt, date_str = completed_at_to_local_date(e.get("completed_at") or "")
-    project_name = project_map.get(e.get("project_id") or "", "Unknown")
+    completed_at = e.get("completed_at") or ""
+    local_dt, date_str = completed_at_to_local_date(completed_at)
+
+    project_id = e.get("project_id") or ""
+    project_name = project_map.get(project_id, "Unknown")
+
     priority = e.get("priority", 1)
-    content_safe = (e.get("content") or "").replace("\n", " ")
-    parent_id = (e.get("parent_id") or "").strip()
+
+    content_raw = e.get("content") or ""
+    content_safe = content_raw.replace("\n", " ")
+
+    parent_id_raw = e.get("parent_id") or ""
+    parent_id = parent_id_raw.strip()
+
     if parent_id:
         parent_title = resolve_parent_title(parent_id, id_to_content, task_cache)
         if parent_title and not parent_title.startswith("(parent_id:"):
@@ -333,6 +385,7 @@ def _enrich_event_for_display(
             parent_suffix = f" (parent_id: {parent_id})"
     else:
         parent_suffix = ""
+
     line = f"- {date_str} — [{project_name}] (P{priority}) {content_safe}{parent_suffix}"
     return local_dt, line
 
@@ -348,12 +401,16 @@ def append_to_completed_md(
     """
     if not new_events:
         return
-    id_to_content = {e["id"]: e["content"] for e in new_events}
-    enriched: list[tuple[datetime, str]] = []
+    id_to_content = {}
     for e in new_events:
-        enriched.append(_enrich_event_for_display(e, id_to_content, project_map, task_cache))
+        id_to_content[e["id"]] = e["content"]
+    enriched = []
+    for e in new_events:
+        local_dt, line = _enrich_event_for_display(e, id_to_content, project_map, task_cache)
+        enriched.append((local_dt, line))
     enriched.sort(key=lambda x: x[0])
-    lines_str = "\n".join(line for _, line in enriched)
+    line_parts = [line for _, line in enriched]
+    lines_str = "\n".join(line_parts)
 
     now_la = datetime.now(WEEK_TZ)
     week_monday = week_start_local(now_la)
@@ -371,9 +428,13 @@ def append_to_completed_md(
 
     content = LOG_PATH.read_text(encoding="utf-8")
     matches = week_heading_re.findall(content)
-    last_week_date = matches[-1] if matches else None
+    if matches:
+        last_week_date = matches[-1]
+    else:
+        last_week_date = None
 
-    if last_week_date == heading_date:
+    current_week_is_last_heading = (last_week_date == heading_date)
+    if current_week_is_last_heading:
         to_append = "\n" + lines_str + "\n"
     else:
         to_append = "\n\n## Week of " + heading_date + "\n\n" + lines_str + "\n"
@@ -412,8 +473,12 @@ def main() -> None:
     items = fetch_completed(token, start_iso, end_iso)
 
     events = load_events()
-    existing_ids = {e.get("id") for e in events if e.get("id")}
-    new_events: list[dict] = []
+    existing_ids = set()
+    for e in events:
+        eid = e.get("id")
+        if eid:
+            existing_ids.add(eid)
+    new_events = []
     for item in items:
         eid = str(item.get("id", ""))
         if not eid or eid in existing_ids:
