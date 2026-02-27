@@ -282,15 +282,24 @@ def fetch_completed(
 
 
 def event_from_item(item: dict) -> dict:
-    """Build event dict from API item (id, content, completed_at, project_id, parent_id, priority)."""
+    """Build event dict from API item (id, content, completed_at, project_id, parent_id, priority).
+    Todoist sends inverted priority (1 = lowest, 4 = highest); we store emoji for display.
+    """
     raw_priority = item.get("priority")
-    if raw_priority == 1:
+    if raw_priority is not None:
+        try:
+            p = int(raw_priority)
+        except (TypeError, ValueError):
+            p = None
+    else:
+        p = None
+    if p == 1:
         priority = "⚪️"
-    elif raw_priority == 2:
+    elif p == 2:
         priority = "🔵"
-    elif raw_priority == 3:
+    elif p == 3:
         priority = "🟠"
-    elif raw_priority == 4:
+    elif p == 4:
         priority = "🔴"
     else:
         priority = "❌"
@@ -354,6 +363,28 @@ def week_start_local(local_dt: datetime) -> datetime:
     return monday.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+def _day_ordinal(day: int) -> str:
+    """Return ordinal suffix for day of month: 1 -> 'st', 2 -> 'nd', 26 -> 'th'."""
+    if 11 <= day <= 13:
+        return "th"
+    if day % 10 == 1:
+        return "st"
+    if day % 10 == 2:
+        return "nd"
+    if day % 10 == 3:
+        return "rd"
+    return "th"
+
+
+def _format_entry_date(local_dt: datetime) -> str:
+    """Format date for entry heading: 'Thursday, Feb 26th'."""
+    weekday = local_dt.strftime("%A")
+    month_abbr = local_dt.strftime("%b")
+    day = local_dt.day
+    ordinal = _day_ordinal(day)
+    return f"{weekday}, {month_abbr} {day}{ordinal}"
+
+
 # Append-only: initial file header (no week heading; that is added when first appending)
 COMPLETED_MD_HEADER = """# Completed tasks
 
@@ -368,32 +399,50 @@ def _enrich_event_for_display(
     project_map: dict[str, str],
     task_cache: dict[str, dict] | None,
 ) -> tuple[datetime, str]:
-    """Return (local_dt, formatted_line) for one event."""
+    """Return (local_dt, formatted_block) for one event. Block is multi-line (date + Completed Task, Parent, Project)."""
     completed_at = e.get("completed_at") or ""
-    local_dt, date_str = completed_at_to_local_date(completed_at)
+    local_dt, _ = completed_at_to_local_date(completed_at)
 
     project_id = e.get("project_id") or ""
     project_name = project_map.get(project_id, "Unknown")
 
-    priority = e.get("priority", 0)
+    # Priority: event may store emoji (new) or raw int (legacy); show emoji either way (Todoist inverted 1–4)
+    p = e.get("priority", 1)
+    if isinstance(p, str):
+        priority_display = p
+    elif p == 1:
+        priority_display = "⚪️"
+    elif p == 2:
+        priority_display = "🔵"
+    elif p == 3:
+        priority_display = "🟠"
+    elif p == 4:
+        priority_display = "🔴"
+    else:
+        priority_display = "❌"
 
     content_raw = e.get("content") or ""
     content_safe = content_raw.replace("\n", " ")
 
     parent_id_raw = e.get("parent_id") or ""
     parent_id = parent_id_raw.strip()
-
     if parent_id:
         parent_title = resolve_parent_title(parent_id, id_to_content, task_cache)
         if parent_title and not parent_title.startswith("(parent_id:"):
-            parent_suffix = f" (parent: {parent_title})"
+            parent_display = parent_title
         else:
-            parent_suffix = f" (parent_id: {parent_id})"
+            parent_display = f"(parent_id: {parent_id})"
     else:
-        parent_suffix = ""
+        parent_display = "—"
 
-    line = f"- {date_str} — [{project_name}] {priority} {content_safe}{parent_suffix}"
-    return local_dt, line
+    date_line = _format_entry_date(local_dt)
+    block = (
+        f"- {date_line}\n"
+        f"  - Completed Task: {priority_display} {content_safe}\n"
+        f"  - Parent: {parent_display}\n"
+        f"  - Project: {project_name}"
+    )
+    return local_dt, block
 
 
 def append_to_completed_md(
@@ -415,8 +464,8 @@ def append_to_completed_md(
         local_dt, line = _enrich_event_for_display(e, id_to_content, project_map, task_cache)
         enriched.append((local_dt, line))
     enriched.sort(key=lambda x: x[0])
-    line_parts = [line for _, line in enriched]
-    lines_str = "\n".join(line_parts)
+    block_parts = [block for _, block in enriched]
+    lines_str = "\n\n".join(block_parts)
 
     now_la = datetime.now(WEEK_TZ)
     week_monday = week_start_local(now_la)
