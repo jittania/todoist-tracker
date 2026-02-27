@@ -514,7 +514,7 @@ def _build_grouped_blocks(
     for date_line in date_order:
         lines = [f"- **{date_line}**"]
         for parent_display, project_name, tasks in groups_by_date[date_line]:
-            lines.append(f"  - Goal: `**{parent_display}**` | {project_name}")
+            lines.append(f"  - Goal: `{parent_display}` | {project_name}")
             for pri, content in tasks:
                 lines.append(f"    - {pri} {content}")
         blocks.append("\n".join(lines))
