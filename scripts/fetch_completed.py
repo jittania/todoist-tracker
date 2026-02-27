@@ -581,6 +581,7 @@ def main() -> None:
     allowed_ids = get_allowed_root_ids_from_env_or_config()
     if not allowed_ids:
         # Safety: no allowlist -> write nothing, exit successfully
+        print("Diagnostic: allowed_root_task_ids is empty (env TODOIST_ALLOWED_ROOT_TASK_IDS or config.json). Exiting without writing.", file=sys.stderr)
         sys.exit(0)
 
     state = get_state()
@@ -616,6 +617,13 @@ def main() -> None:
             continue
         new_events.append(event_from_item(item))
         existing_ids.add(eid)
+
+    # Diagnostic: so we can see why nothing gets written
+    print(
+        f"Diagnostic: window {start_iso} -> {end_iso} | "
+        f"fetched={len(items)} existing_ids={len(existing_ids)} new_events={len(new_events)}",
+        file=sys.stderr,
+    )
 
     full_cache = {**cache, **cache_updates}
 
